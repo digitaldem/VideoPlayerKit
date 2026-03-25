@@ -10,12 +10,14 @@ import VLCKit
 struct NSViewVLCPlayer: NSViewRepresentable {
     typealias NSViewType = PlayerContainerView
     
+    let profile: VideoPlayerProfile
     let url: URL
     let referer: URL?
     let isLive: Bool
     let isMuted: Bool
 
-    init(url: String, referer: String, isLive: Bool, isMuted: Bool) {
+    init(profile: VideoPlayerProfile, url: String, referer: String, isLive: Bool, isMuted: Bool) {
+        self.profile = profile
         self.url = URL(string: url) ?? URL(string: "https://invalid-url")!
         self.referer = URL(string: referer)
         self.isLive = isLive
@@ -26,13 +28,14 @@ struct NSViewVLCPlayer: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PlayerContainerView {
         let containerView = PlayerContainerView()
-        let player = Self.createPlayer(url: url, referer: referer)
+        let player = profile.vlc.createPlayer(url: url, referer: referer)
         
         player.drawable = containerView
         player.audio?.isMuted = isMuted
         
         context.coordinator.containerView = containerView
         context.coordinator.player = player
+        context.coordinator.profile = profile
         context.coordinator.url = url
         context.coordinator.referer = referer
         context.coordinator.isMuted = isMuted
@@ -99,6 +102,7 @@ struct NSViewVLCPlayer: NSViewRepresentable {
     final class Coordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
         weak var containerView: PlayerContainerView?
         var player: VLCMediaPlayer?
+        var profile: VideoPlayerProfile?
         var url: URL?
         var referer: URL?
         var isMuted: Bool = false
@@ -118,11 +122,11 @@ struct NSViewVLCPlayer: NSViewRepresentable {
         }
         
         func performReload() {
-            guard let containerView, let url else { return }
+            guard let containerView, let profile, let url else { return }
             
             self.player?.stop()
 
-            let newPlayer = NSViewVLCPlayer.createPlayer(url: url, referer: referer)
+            let newPlayer = profile.vlc.createPlayer(url: url, referer: referer)
             newPlayer.drawable = containerView
             newPlayer.audio?.isMuted = isMuted
 
@@ -175,31 +179,6 @@ struct NSViewVLCPlayer: NSViewRepresentable {
                 )
             }
         }
-    }
-
-    static func createPlayer(url: URL, referer: URL?) -> VLCMediaPlayer {
-        NotificationCenter.default.post(name: .playerInitializing, object: nil, userInfo: ["url": url as Any])
-        
-        let player = VLCMediaPlayer()
-        let media = VLCMedia(url: url)
-        if let referer = referer, !referer.absoluteString.isEmpty {
-            media.addOption(":http-referrer=\(referer.absoluteString)")
-        }
-        
-        media.addOptions([
-            "network-caching": 3000,
-            "live-caching": 3000,
-            "clock-jitter": 5000,
-            "clock-synchro": 0,
-            "skip-frames": 0,
-            "drop-late-frames": 0,
-            "avcodec-hurry-up": 0,
-            "avcodec-skip-frame": 0,
-            "avcodec-skip-idct": 0,
-        ])
-
-        player.media = media
-        return player
     }
 }
 #endif

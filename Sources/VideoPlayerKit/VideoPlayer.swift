@@ -7,10 +7,10 @@ import SwiftUI
 
 @MainActor
 @ViewBuilder
-public func VideoPlayer(url: String, referer: String, isLive: Bool, isMuted: Bool) -> some View {
+public func VideoPlayer(profile: VideoPlayerProfile = .precise, url: String, referer: String, isLive: Bool, isMuted: Bool) -> some View {
     #if canImport(UIKit)
-    UIViewVLCPlayer(url: url, referer: referer, isLive: isLive, isMuted: isMuted)
+    UIViewVLCPlayer(profile: profile, url: url, referer: referer, isLive: isLive, isMuted: isMuted)
     #elseif canImport(AppKit)
-    NSViewVLCPlayer(url: url, referer: referer, isLive: isLive, isMuted: isMuted)
+    NSViewVLCPlayer(profile: profile, url: url, referer: referer, isLive: isLive, isMuted: isMuted)
     #endif
 }
