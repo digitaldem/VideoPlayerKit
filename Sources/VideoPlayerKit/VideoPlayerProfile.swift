@@ -49,6 +49,7 @@ internal struct VLCPlayerProfile {
             "avcodec-skip-frame": 0,
             "avcodec-skip-idct": 0,
             "avcodec-hw": "any",
+            "http-reconnect": true,
         ]
     }
 
