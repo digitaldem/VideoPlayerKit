@@ -125,6 +125,11 @@ struct NSViewVLCPlayer: NSViewRepresentable {
             guard let containerView, let profile, let url else { return }
             
             self.player?.stop()
+            NotificationCenter.default.post(
+                name: .playerInitializing,
+                object: nil,
+                userInfo: ["url": url as Any]
+            )
 
             let newPlayer = profile.vlc.createPlayer(url: url, referer: referer)
             newPlayer.drawable = containerView

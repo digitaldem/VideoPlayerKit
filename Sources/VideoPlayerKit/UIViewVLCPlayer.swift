@@ -129,6 +129,11 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
             guard let controller, let profile, let url else { return }
             
             controller.mediaPlayer?.stop()
+            NotificationCenter.default.post(
+                name: .playerInitializing,
+                object: nil,
+                userInfo: ["url": url as Any]
+            )
 
             let newPlayer = profile.vlc.createPlayer(url: url, referer: referer)
             controller.mediaPlayer = newPlayer
