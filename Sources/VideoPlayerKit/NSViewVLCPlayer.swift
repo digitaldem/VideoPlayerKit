@@ -61,6 +61,16 @@ struct NSViewVLCPlayer: NSViewRepresentable {
                     coordinator?.togglePlayPause()
                 }
             }
+            context.coordinator.seekObserver = NotificationCenter.default.addObserver(
+                forName: .playerSeek,
+                object: nil,
+                queue: .main
+            ) { [weak coordinator = context.coordinator] notification in
+                let interval = notification.userInfo?["interval"] as? Int ?? 30
+                MainActor.assumeIsolated {
+                    coordinator?.performSeek(interval: interval)
+                }
+            }
         }
         
         player.delegate = context.coordinator
@@ -81,6 +91,10 @@ struct NSViewVLCPlayer: NSViewRepresentable {
         if let reload = coordinator.reloadObserver {
             NotificationCenter.default.removeObserver(reload)
             coordinator.reloadObserver = nil
+        }
+        if let seek = coordinator.seekObserver {
+            NotificationCenter.default.removeObserver(seek)
+            coordinator.seekObserver = nil
         }
 
         coordinator.player?.stop()
@@ -111,6 +125,7 @@ struct NSViewVLCPlayer: NSViewRepresentable {
         var didSendPlaybackEvent = false
         var reloadObserver: NSObjectProtocol?
         var toggleObserver: NSObjectProtocol?
+        var seekObserver: NSObjectProtocol?
         
         func togglePlayPause() {
             guard let player else { return }
@@ -118,6 +133,15 @@ struct NSViewVLCPlayer: NSViewRepresentable {
                 player.pause()
             } else {
                 player.play()
+            }
+        }
+        
+        func performSeek(interval: Int) {
+            guard let player else { return }
+            if interval > 0 {
+                player.jumpForward(Int32(interval))
+            } else if interval < 0 {
+                player.jumpBackward(Int32(-interval))
             }
         }
         
