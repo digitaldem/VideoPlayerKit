@@ -177,6 +177,11 @@ struct NSViewVLCPlayer: NSViewRepresentable {
                     NotificationCenter.default.post(name: .playerPlaybackStarted, object: nil, userInfo: ["url": url as Any])
                 }
             case .playing:
+                NotificationCenter.default.post(
+                    name: .playerPlaybackResumed,
+                    object: nil,
+                    userInfo: ["url": url as Any]
+                )
                 if !isHLS, !didSendPlaybackEvent {
                     if totalMinutes == 0 {
                         totalMinutes = Int(player.media?.length.intValue ?? 0) / 1000 / 60
@@ -186,6 +191,8 @@ struct NSViewVLCPlayer: NSViewRepresentable {
                 }
             case .error:
                 NotificationCenter.default.post(name: .playerPlaybackError, object: nil, userInfo: ["url": url as Any])
+            case .paused:
+                NotificationCenter.default.post(name: .playerPlaybackPaused, object: nil, userInfo: ["url": url as Any])
             default:
                 break
             }

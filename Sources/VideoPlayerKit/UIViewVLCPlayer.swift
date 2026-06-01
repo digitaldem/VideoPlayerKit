@@ -29,6 +29,15 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> VLCPlayerViewController {
         let controller = VLCPlayerViewController()
         let player = profile.vlc.createPlayer(url: url, referer: referer)
+        
+        let isLiveStream = self.isLive
+        controller.onSeek = { [weak coordinator = context.coordinator] interval in
+            if !isLiveStream {
+                Task { @MainActor in
+                    coordinator?.performSeek(interval: interval)
+                }
+            }
+        }
     
         controller.mediaPlayer = player
         player.drawable = controller.view
@@ -107,12 +116,31 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
 
     class VLCPlayerViewController: UIViewController {
         var onPlayPause: (() -> Void)?
+        var onSeek: ((Int) -> Void)?
         var mediaPlayer: VLCMediaPlayer?
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
             mediaPlayer?.stop()
             mediaPlayer = nil
+        }
+        
+        override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            var handled = false
+            for press in presses {
+                #if os(tvOS)
+                if press.type == .leftArrow {
+                    onSeek?(-30)
+                    handled = true
+                } else if press.type == .rightArrow {
+                    onSeek?(30)
+                    handled = true
+                }
+                #endif
+            }
+            if !handled {
+                super.pressesBegan(presses, with: event)
+            }
         }
     }
 
@@ -198,6 +226,11 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
 
             case .playing:
                 print("▶️ VLC Player: stream playing")
+                NotificationCenter.default.post(
+                    name: .playerPlaybackResumed,
+                    object: nil,
+                    userInfo: ["url": url as Any]
+                )
                 if !isHLS, !didSendPlaybackEvent {
                     if totalMinutes == 0 {
                         totalMinutes = Int(player.media?.length.intValue ?? 0) / 1000 / 60
@@ -213,6 +246,11 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         
             case .paused:
                 print("⏸️ VLC Player: stream paused")
+                NotificationCenter.default.post(
+                    name: .playerPlaybackPaused,
+                    object: nil,
+                    userInfo: ["url": url as Any]
+                )
                 break
         
             case .stopped:
