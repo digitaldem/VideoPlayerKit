@@ -4,6 +4,7 @@
 
 import SwiftUI
 import AVKit
+import AVFoundation
 #if os(iOS)
 import MobileVLCKit
 #elseif os(tvOS)
@@ -27,6 +28,16 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> VLCPlayerViewController {
+        #if os(iOS)
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .moviePlayback, options: [])
+            try audioSession.setActive(true)
+        } catch {
+            print("Failed to set audio session category: \(error)")
+        }
+        #endif
+
         let controller = VLCPlayerViewController()
         let player = profile.vlc.createPlayer(url: url, referer: referer)
         
@@ -118,6 +129,35 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         var onPlayPause: (() -> Void)?
         var onSeek: ((Int) -> Void)?
         var mediaPlayer: VLCMediaPlayer?
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            
+            #if os(iOS)
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(applicationDidEnterBackground),
+                name: UIApplication.didEnterBackgroundNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(applicationWillEnterForeground),
+                name: UIApplication.willEnterForegroundNotification,
+                object: nil
+            )
+            #endif
+        }
+        
+        #if os(iOS)
+        @objc private func applicationDidEnterBackground() {
+            mediaPlayer?.drawable = nil
+        }
+        
+        @objc private func applicationWillEnterForeground() {
+            mediaPlayer?.drawable = self.view
+        }
+        #endif
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
