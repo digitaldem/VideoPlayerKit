@@ -135,10 +135,13 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         var mediaPlayer: VLCMediaPlayer?
         var seekInterval = 30
 
+        #if os(tvOS)
+        private var pausedForBackground = false
+        #endif
+
         override func viewDidLoad() {
             super.viewDidLoad()
 
-            #if os(iOS)
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(applicationDidEnterBackground),
@@ -151,18 +154,31 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
                 name: UIApplication.willEnterForegroundNotification,
                 object: nil
             )
+        }
+
+        @objc private func applicationDidEnterBackground() {
+            #if os(iOS)
+            // Detach the drawable but keep the player running so audio continues in the background.
+            mediaPlayer?.drawable = nil
+            #elseif os(tvOS)
+            // tvOS apps are expected to stop playback when backgrounded, unlike iOS.
+            if mediaPlayer?.isPlaying == true {
+                pausedForBackground = true
+                mediaPlayer?.pause()
+            }
             #endif
         }
 
-        #if os(iOS)
-        @objc private func applicationDidEnterBackground() {
-            mediaPlayer?.drawable = nil
-        }
-
         @objc private func applicationWillEnterForeground() {
+            #if os(iOS)
             mediaPlayer?.drawable = self.view
+            #elseif os(tvOS)
+            if pausedForBackground {
+                pausedForBackground = false
+                mediaPlayer?.play()
+            }
+            #endif
         }
-        #endif
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
