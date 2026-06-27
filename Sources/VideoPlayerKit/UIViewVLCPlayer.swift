@@ -18,13 +18,15 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
     let referer: URL?
     let isLive: Bool
     let isMuted: Bool
+    let seekInterval: Int
 
-    init(profile: VideoPlayerProfile, url: String, referer: String, isLive: Bool, isMuted: Bool) {
+    init(profile: VideoPlayerProfile, url: String, referer: String, isLive: Bool, isMuted: Bool, seekInterval: Int) {
         self.profile = profile
         self.url = URL(string: url) ?? URL(string: "https://invalid-url")!
         self.referer = URL(string: referer)
         self.isLive = isLive
         self.isMuted = isMuted
+        self.seekInterval = seekInterval
     }
 
     func makeUIViewController(context: Context) -> VLCPlayerViewController {
@@ -39,8 +41,9 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         #endif
 
         let controller = VLCPlayerViewController()
+        controller.seekInterval = seekInterval
         let player = profile.vlc.createPlayer(url: url, referer: referer)
-        
+
         let isLiveStream = self.isLive
         controller.onSeek = { [weak coordinator = context.coordinator] interval in
             if !isLiveStream {
@@ -49,7 +52,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
                 }
             }
         }
-    
+
         controller.mediaPlayer = player
         player.drawable = controller.view
         player.audio?.isMuted = isMuted
@@ -59,6 +62,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         context.coordinator.url = url
         context.coordinator.referer = referer
         context.coordinator.isMuted = isMuted
+        context.coordinator.seekInterval = seekInterval
 
         player.delegate = context.coordinator
         player.play()
@@ -88,9 +92,9 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
                 object: nil,
                 queue: .main
             ) { [weak coordinator = context.coordinator] notification in
-                let interval = notification.userInfo?["interval"] as? Int ?? 30
+                let explicitInterval = notification.userInfo?["interval"] as? Int
                 Task { @MainActor in
-                    coordinator?.performSeek(interval: interval)
+                    coordinator?.performSeek(interval: explicitInterval ?? coordinator?.seekInterval ?? 30)
                 }
             }
         }
@@ -102,7 +106,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         context.coordinator.controller = vc
         vc.mediaPlayer?.audio?.isMuted = isMuted
     }
-    
+
     static func dismantleUIViewController(_ uiViewController: VLCPlayerViewController, coordinator: Coordinator) {
         if let toggle = coordinator.toggleObserver {
             NotificationCenter.default.removeObserver(toggle)
@@ -116,7 +120,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
             NotificationCenter.default.removeObserver(seek)
             coordinator.seekObserver = nil
         }
-        
+
         uiViewController.mediaPlayer?.stop()
         uiViewController.mediaPlayer = nil
     }
@@ -129,10 +133,11 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         var onPlayPause: (() -> Void)?
         var onSeek: ((Int) -> Void)?
         var mediaPlayer: VLCMediaPlayer?
+        var seekInterval = 30
 
         override func viewDidLoad() {
             super.viewDidLoad()
-            
+
             #if os(iOS)
             NotificationCenter.default.addObserver(
                 self,
@@ -148,12 +153,12 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
             )
             #endif
         }
-        
+
         #if os(iOS)
         @objc private func applicationDidEnterBackground() {
             mediaPlayer?.drawable = nil
         }
-        
+
         @objc private func applicationWillEnterForeground() {
             mediaPlayer?.drawable = self.view
         }
@@ -164,16 +169,16 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
             mediaPlayer?.stop()
             mediaPlayer = nil
         }
-        
+
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             var handled = false
             for press in presses {
                 #if os(tvOS)
                 if press.type == .leftArrow {
-                    onSeek?(-30)
+                    onSeek?(-seekInterval)
                     handled = true
                 } else if press.type == .rightArrow {
-                    onSeek?(30)
+                    onSeek?(seekInterval)
                     handled = true
                 }
                 #endif
@@ -184,42 +189,14 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         }
     }
 
-    @MainActor
-    class Coordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
+    final class Coordinator: VLCPlaybackCoordinator {
         weak var controller: VLCPlayerViewController?
-        var profile: VideoPlayerProfile?
-        var url: URL?
-        var referer: URL?
-        var isMuted: Bool = false
-        var totalMinutes: Int = 0
-        var lastPublishedMinute: Int = -1
-        var didSendPlaybackEvent: Bool = false
-        
-        var reloadObserver: NSObjectProtocol?
-        var toggleObserver: NSObjectProtocol?
-        var seekObserver: NSObjectProtocol?
-        
-        func togglePlayPause() {
-            guard let player = controller?.mediaPlayer else { return }
-            if player.isPlaying {
-                player.pause()
-            } else {
-                player.play()
-            }
-        }
-        
-        func performSeek(interval: Int) {
-            guard let player = controller?.mediaPlayer else { return }
-            if interval > 0 {
-                player.jumpForward(Int32(interval))
-            } else if interval < 0 {
-                player.jumpBackward(Int32(-interval))
-            }
-        }
-        
+
+        override var mediaPlayer: VLCMediaPlayer? { controller?.mediaPlayer }
+
         func performReload() {
             guard let controller, let profile, let url else { return }
-            
+
             controller.mediaPlayer?.stop()
             NotificationCenter.default.post(
                 name: .playerInitializing,
@@ -229,109 +206,14 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
 
             let newPlayer = profile.vlc.createPlayer(url: url, referer: referer)
             controller.mediaPlayer = newPlayer
-            
+
             newPlayer.drawable = controller.view
             newPlayer.audio?.isMuted = isMuted
-        
-            self.didSendPlaybackEvent = false
-        
+
+            resetPlaybackTracking()
+
             newPlayer.delegate = self
             newPlayer.play()
-        }
-
-        func mediaPlayerStateChanged(_ aNotification: Notification) {
-            guard let player = aNotification.object as? VLCMediaPlayer else { return }
-            let isHLS = (url?.pathExtension.lowercased() == "m3u8")
-            
-            switch player.state {
-            case .opening:
-                print("🌐 VLC Player: opening...")
-                break
-        
-            case .buffering:
-                //print("⏳ VLC Player: buffering...")
-                break
-
-            case .esAdded:
-                print("➕ VLC Player: elementary stream added")
-                if isHLS, !didSendPlaybackEvent {
-                    didSendPlaybackEvent = true
-                    NotificationCenter.default.post(
-                        name: .playerPlaybackStarted,
-                        object: nil,
-                        userInfo: ["url": url as Any]
-                    )
-                }
-                break
-
-            case .playing:
-                print("▶️ VLC Player: stream playing")
-                NotificationCenter.default.post(
-                    name: .playerPlaybackResumed,
-                    object: nil,
-                    userInfo: ["url": url as Any]
-                )
-                if !isHLS, !didSendPlaybackEvent {
-                    if totalMinutes == 0 {
-                        totalMinutes = Int(player.media?.length.intValue ?? 0) / 1000 / 60
-                    }
-                    didSendPlaybackEvent = true
-                    NotificationCenter.default.post(
-                        name: .playerPlaybackStarted,
-                        object: nil,
-                        userInfo: ["url": url as Any]
-                    )
-                }
-                break
-        
-            case .paused:
-                print("⏸️ VLC Player: stream paused")
-                NotificationCenter.default.post(
-                    name: .playerPlaybackPaused,
-                    object: nil,
-                    userInfo: ["url": url as Any]
-                )
-                break
-        
-            case .stopped:
-                print("⏹️ VLC Player: stream stopped")
-                break
-        
-            case .ended:
-                print("⏏️ VLC Player: stream ended")
-                break
-        
-            case .error:
-                print("⚠️ VLC Player: error")
-                NotificationCenter.default.post(
-                    name: .playerPlaybackError,
-                    object: nil,
-                    userInfo: ["url": url as Any]
-                )
-                break
-        
-            @unknown default:
-                print("❓ VLC Player: unknown state [\(player.state.rawValue)]")
-                break
-            }
-        }
-        
-        func mediaPlayerTimeChanged(_ aNotification: Notification) {
-            guard let player = aNotification.object as? VLCMediaPlayer else { return }
-            let currentMS = Int(player.time.intValue)
-            guard currentMS > 0 else { return }
-            let currentMinute = currentMS / 1000 / 60
-            if currentMinute > lastPublishedMinute {
-                lastPublishedMinute = currentMinute
-                NotificationCenter.default.post(
-                    name: .playerPlaybackTimeChanged,
-                    object: nil,
-                    userInfo: [
-                        "total": totalMinutes,
-                        "current": currentMinute
-                    ]
-                )
-            }
         }
     }
 }

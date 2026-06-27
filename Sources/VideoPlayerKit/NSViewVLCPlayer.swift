@@ -9,19 +9,21 @@ import VLCKit
 
 struct NSViewVLCPlayer: NSViewRepresentable {
     typealias NSViewType = PlayerContainerView
-    
+
     let profile: VideoPlayerProfile
     let url: URL
     let referer: URL?
     let isLive: Bool
     let isMuted: Bool
+    let seekInterval: Int
 
-    init(profile: VideoPlayerProfile, url: String, referer: String, isLive: Bool, isMuted: Bool) {
+    init(profile: VideoPlayerProfile, url: String, referer: String, isLive: Bool, isMuted: Bool, seekInterval: Int) {
         self.profile = profile
         self.url = URL(string: url) ?? URL(string: "https://invalid-url")!
         self.referer = URL(string: referer)
         self.isLive = isLive
         self.isMuted = isMuted
+        self.seekInterval = seekInterval
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -29,17 +31,18 @@ struct NSViewVLCPlayer: NSViewRepresentable {
     func makeNSView(context: Context) -> PlayerContainerView {
         let containerView = PlayerContainerView()
         let player = profile.vlc.createPlayer(url: url, referer: referer)
-        
+
         player.drawable = containerView
         player.audio?.isMuted = isMuted
-        
+
         context.coordinator.containerView = containerView
         context.coordinator.player = player
         context.coordinator.profile = profile
         context.coordinator.url = url
         context.coordinator.referer = referer
         context.coordinator.isMuted = isMuted
-        
+        context.coordinator.seekInterval = seekInterval
+
         if (isLive) {
             context.coordinator.reloadObserver = NotificationCenter.default.addObserver(
                 forName: Notification.Name.playerTriggerReload,
@@ -66,23 +69,23 @@ struct NSViewVLCPlayer: NSViewRepresentable {
                 object: nil,
                 queue: .main
             ) { [weak coordinator = context.coordinator] notification in
-                let interval = notification.userInfo?["interval"] as? Int ?? 30
+                let explicitInterval = notification.userInfo?["interval"] as? Int
                 MainActor.assumeIsolated {
-                    coordinator?.performSeek(interval: interval)
+                    coordinator?.performSeek(interval: explicitInterval ?? coordinator?.seekInterval ?? 30)
                 }
             }
         }
-        
+
         player.delegate = context.coordinator
         player.play()
-        
+
         return containerView
     }
-    
+
     func updateNSView(_ nsView: PlayerContainerView, context: Context) {
         context.coordinator.player?.audio?.isMuted = isMuted
     }
-    
+
     static func dismantleNSView(_ nsView: PlayerContainerView, coordinator: Coordinator) {
         if let toggle = coordinator.toggleObserver {
             NotificationCenter.default.removeObserver(toggle)
@@ -100,10 +103,10 @@ struct NSViewVLCPlayer: NSViewRepresentable {
         coordinator.player?.stop()
         coordinator.player = nil
     }
-    
+
     class PlayerContainerView: NSView {
         var onDisappear: (() -> Void)?
-        
+
         override func viewWillMove(toWindow newWindow: NSWindow?) {
             super.viewWillMove(toWindow: newWindow)
             if newWindow == nil {
@@ -112,43 +115,16 @@ struct NSViewVLCPlayer: NSViewRepresentable {
         }
     }
 
-    @MainActor
-    final class Coordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
+    final class Coordinator: VLCPlaybackCoordinator {
         weak var containerView: PlayerContainerView?
         var player: VLCMediaPlayer?
-        var profile: VideoPlayerProfile?
-        var url: URL?
-        var referer: URL?
-        var isMuted: Bool = false
-        var totalMinutes: Int = 0
-        var lastPublishedMinute: Int = -1
-        var didSendPlaybackEvent = false
-        var reloadObserver: NSObjectProtocol?
-        var toggleObserver: NSObjectProtocol?
-        var seekObserver: NSObjectProtocol?
-        
-        func togglePlayPause() {
-            guard let player else { return }
-            if player.isPlaying {
-                player.pause()
-            } else {
-                player.play()
-            }
-        }
-        
-        func performSeek(interval: Int) {
-            guard let player else { return }
-            if interval > 0 {
-                player.jumpForward(Int32(interval))
-            } else if interval < 0 {
-                player.jumpBackward(Int32(-interval))
-            }
-        }
-        
+
+        override var mediaPlayer: VLCMediaPlayer? { player }
+
         func performReload() {
             guard let containerView, let profile, let url else { return }
-            
-            self.player?.stop()
+
+            player?.stop()
             NotificationCenter.default.post(
                 name: .playerInitializing,
                 object: nil,
@@ -159,61 +135,11 @@ struct NSViewVLCPlayer: NSViewRepresentable {
             newPlayer.drawable = containerView
             newPlayer.audio?.isMuted = isMuted
 
-            self.didSendPlaybackEvent = false
-            self.player = newPlayer
+            resetPlaybackTracking()
+            player = newPlayer
 
             newPlayer.delegate = self
             newPlayer.play()
-        }
-        
-        func mediaPlayerStateChanged(_ aNotification: Notification) {
-            guard let player = aNotification.object as? VLCMediaPlayer else { return }
-            let isHLS = (url?.pathExtension.lowercased() == "m3u8")
-
-            switch player.state {
-            case .esAdded:
-                if isHLS, !didSendPlaybackEvent {
-                    didSendPlaybackEvent = true
-                    NotificationCenter.default.post(name: .playerPlaybackStarted, object: nil, userInfo: ["url": url as Any])
-                }
-            case .playing:
-                NotificationCenter.default.post(
-                    name: .playerPlaybackResumed,
-                    object: nil,
-                    userInfo: ["url": url as Any]
-                )
-                if !isHLS, !didSendPlaybackEvent {
-                    if totalMinutes == 0 {
-                        totalMinutes = Int(player.media?.length.intValue ?? 0) / 1000 / 60
-                    }
-                    didSendPlaybackEvent = true
-                    NotificationCenter.default.post(name: .playerPlaybackStarted, object: nil, userInfo: ["url": url as Any])
-                }
-            case .error:
-                NotificationCenter.default.post(name: .playerPlaybackError, object: nil, userInfo: ["url": url as Any])
-            case .paused:
-                NotificationCenter.default.post(name: .playerPlaybackPaused, object: nil, userInfo: ["url": url as Any])
-            default:
-                break
-            }
-        }
-        
-        func mediaPlayerTimeChanged(_ aNotification: Notification) {
-            guard let player = aNotification.object as? VLCMediaPlayer else { return }
-            let currentMS = Int(player.time.intValue)
-            guard currentMS > 0 else { return }
-            let currentMinute = currentMS / 1000 / 60
-            if currentMinute > lastPublishedMinute {
-                lastPublishedMinute = currentMinute
-                NotificationCenter.default.post(
-                    name: Notification.Name.playerPlaybackTimeChanged,
-                    object: nil,
-                    userInfo: [
-                        "total": totalMinutes,
-                        "current": currentMinute
-                    ]
-                )
-            }
         }
     }
 }

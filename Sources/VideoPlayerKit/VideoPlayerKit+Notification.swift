@@ -12,8 +12,6 @@ public extension Notification.Name {
     static let playerPlaybackStarted = Notification.Name("com.digitaldementia.VideoPlayerKit.playerPlaybackStarted")
     static let playerPlaybackStopped = Notification.Name("com.digitaldementia.VideoPlayerKit.playerPlaybackStopped")
     static let playerPlaybackTimeChanged = Notification.Name("com.digitaldementia.VideoPlayerKit.playerPlaybackTimeChanged")
-    static let playerStallDetected  = Notification.Name("com.digitaldementia.VideoPlayerKit.playerStallDetected")
-    static let playerStallResolved  = Notification.Name("com.digitaldementia.VideoPlayerKit.playerStallResolved")
     static let playerTogglePlayPause = Notification.Name("com.digitaldementia.VideoPlayerKit.playerTogglePlayPause")
     static let playerTriggerReload = Notification.Name("com.digitaldementia.VideoPlayerKit.playerTriggerReload")
     static let playerSeek = Notification.Name("com.digitaldementia.VideoPlayerKit.playerSeek")
