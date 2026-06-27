@@ -4,15 +4,15 @@
 
 import Foundation
 #if os(macOS)
-import VLCKit
+@preconcurrency import VLCKit
 #elseif os(iOS)
-import MobileVLCKit
+@preconcurrency import MobileVLCKit
 #elseif os(tvOS)
-import TVVLCKit
+@preconcurrency import TVVLCKit
 #endif
 
 @MainActor
-class VLCPlaybackCoordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
+class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
     var url: URL?
     var referer: URL?
     var profile: VideoPlayerProfile?
@@ -22,6 +22,10 @@ class VLCPlaybackCoordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
     private(set) var totalMinutes = 0
     private var lastPublishedMinute = -1
     private var didSendPlaybackEvent = false
+
+    /// Guards against an opening/buffering stream that never resolves (dead host, black-holed connection, etc).
+    private var loadWatchdog: Task<Void, Never>?
+    private let loadTimeoutSeconds: UInt64 = 15
 
     var reloadObserver: NSObjectProtocol?
     var toggleObserver: NSObjectProtocol?
@@ -53,21 +57,70 @@ class VLCPlaybackCoordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
     func resetPlaybackTracking() {
         lastPublishedMinute = -1
         didSendPlaybackEvent = false
+        cancelLoadWatchdog()
     }
 
-    func mediaPlayerStateChanged(_ aNotification: Notification) {
+    private func startLoadWatchdog() {
+        guard loadWatchdog == nil else { return }
+        loadWatchdog = Task { [weak self, loadTimeoutSeconds] in
+            try? await Task.sleep(nanoseconds: loadTimeoutSeconds * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.handleLoadTimeout()
+        }
+    }
+
+    private func cancelLoadWatchdog() {
+        loadWatchdog?.cancel()
+        loadWatchdog = nil
+    }
+
+    private func handleLoadTimeout() {
+        loadWatchdog = nil
+        guard let mediaPlayer, mediaPlayer.state == .opening || mediaPlayer.state == .buffering else { return }
+        print("⏱️ VLC Player: timed out while loading, aborting")
+        mediaPlayer.stopAsync()
+        NotificationCenter.default.post(
+            name: .playerPlaybackError,
+            object: nil,
+            userInfo: ["url": url as Any]
+        )
+    }
+
+    /// VLCKit does not guarantee delegate callbacks arrive on the main thread (notably for `.error`,
+    /// which is usually reported directly from libVLC's worker thread). Stay `nonisolated` here, pull
+    /// out the plain values we need while still on the caller's thread, and hop to the main actor with
+    /// just those — `Notification`/`VLCMediaPlayer` themselves aren't `Sendable` so they can't cross.
+    nonisolated func mediaPlayerStateChanged(_ aNotification: Notification) {
         guard let player = aNotification.object as? VLCMediaPlayer else { return }
+        let state = player.state
+        let totalLengthMs = player.media.map { Int($0.length.intValue) }
+        Task { @MainActor [weak self] in
+            self?.handleStateChanged(state: state, totalLengthMs: totalLengthMs)
+        }
+    }
+
+    nonisolated func mediaPlayerTimeChanged(_ aNotification: Notification) {
+        guard let player = aNotification.object as? VLCMediaPlayer else { return }
+        let currentMS = Int(player.time.intValue)
+        Task { @MainActor [weak self] in
+            self?.handleTimeChanged(currentMS: currentMS)
+        }
+    }
+
+    private func handleStateChanged(state: VLCMediaPlayerState, totalLengthMs: Int?) {
         let isHLS = (url?.pathExtension.lowercased() == "m3u8")
 
-        switch player.state {
+        switch state {
         case .opening:
             print("🌐 VLC Player: opening...")
+            startLoadWatchdog()
 
         case .buffering:
             break
 
         case .esAdded:
             print("➕ VLC Player: elementary stream added")
+            cancelLoadWatchdog()
             if isHLS, !didSendPlaybackEvent {
                 didSendPlaybackEvent = true
                 NotificationCenter.default.post(
@@ -79,6 +132,7 @@ class VLCPlaybackCoordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
 
         case .playing:
             print("▶️ VLC Player: stream playing")
+            cancelLoadWatchdog()
             NotificationCenter.default.post(
                 name: .playerPlaybackResumed,
                 object: nil,
@@ -86,7 +140,7 @@ class VLCPlaybackCoordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
             )
             if !isHLS, !didSendPlaybackEvent {
                 if totalMinutes == 0 {
-                    totalMinutes = Int(player.media?.length.intValue ?? 0) / 1000 / 60
+                    totalMinutes = (totalLengthMs ?? 0) / 1000 / 60
                 }
                 didSendPlaybackEvent = true
                 NotificationCenter.default.post(
@@ -108,12 +162,15 @@ class VLCPlaybackCoordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
             // No-op: stop is also triggered by our own reload/teardown paths, so it
             // doesn't reliably mean "playback ended" and isn't posted as an event.
             print("⏹️ VLC Player: stream stopped")
+            cancelLoadWatchdog()
 
         case .ended:
             print("⏏️ VLC Player: stream ended")
+            cancelLoadWatchdog()
 
         case .error:
             print("⚠️ VLC Player: error")
+            cancelLoadWatchdog()
             NotificationCenter.default.post(
                 name: .playerPlaybackError,
                 object: nil,
@@ -121,13 +178,11 @@ class VLCPlaybackCoordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
             )
 
         @unknown default:
-            print("❓ VLC Player: unknown state [\(player.state.rawValue)]")
+            print("❓ VLC Player: unknown state [\(state.rawValue)]")
         }
     }
 
-    func mediaPlayerTimeChanged(_ aNotification: Notification) {
-        guard let player = aNotification.object as? VLCMediaPlayer else { return }
-        let currentMS = Int(player.time.intValue)
+    private func handleTimeChanged(currentMS: Int) {
         guard currentMS > 0 else { return }
         let currentMinute = currentMS / 1000 / 60
         if currentMinute > lastPublishedMinute {
@@ -140,6 +195,16 @@ class VLCPlaybackCoordinator: NSObject, @preconcurrency VLCMediaPlayerDelegate {
                     "current": currentMinute
                 ]
             )
+        }
+    }
+}
+
+extension VLCMediaPlayer {
+    /// Stops playback on a background queue so a stuck network/demux thread can't block the calling
+    /// (typically main) thread while libVLC unwinds a slow or hung connection attempt.
+    func stopAsync() {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            self.stop()
         }
     }
 }

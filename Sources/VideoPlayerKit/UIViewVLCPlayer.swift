@@ -121,7 +121,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
             coordinator.seekObserver = nil
         }
 
-        uiViewController.mediaPlayer?.stop()
+        uiViewController.mediaPlayer?.stopAsync()
         uiViewController.mediaPlayer = nil
     }
 
@@ -182,7 +182,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            mediaPlayer?.stop()
+            mediaPlayer?.stopAsync()
             mediaPlayer = nil
         }
 
@@ -213,7 +213,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         func performReload() {
             guard let controller, let profile, let url else { return }
 
-            controller.mediaPlayer?.stop()
+            controller.mediaPlayer?.stopAsync()
             NotificationCenter.default.post(
                 name: .playerInitializing,
                 object: nil,

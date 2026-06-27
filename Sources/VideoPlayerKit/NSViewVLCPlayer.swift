@@ -100,7 +100,7 @@ struct NSViewVLCPlayer: NSViewRepresentable {
             coordinator.seekObserver = nil
         }
 
-        coordinator.player?.stop()
+        coordinator.player?.stopAsync()
         coordinator.player = nil
     }
 
@@ -124,7 +124,7 @@ struct NSViewVLCPlayer: NSViewRepresentable {
         func performReload() {
             guard let containerView, let profile, let url else { return }
 
-            player?.stop()
+            player?.stopAsync()
             NotificationCenter.default.post(
                 name: .playerInitializing,
                 object: nil,
