@@ -61,11 +61,15 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
         context.coordinator.profile = profile
         context.coordinator.url = url
         context.coordinator.referer = referer
+        context.coordinator.isLive = isLive
         context.coordinator.isMuted = isMuted
         context.coordinator.seekInterval = seekInterval
 
-        player.delegate = context.coordinator
-        player.play()
+        controller.onRetire = { [weak coordinator = context.coordinator] player in
+            coordinator?.retire(player)
+        }
+
+        context.coordinator.adopt(player)
 
         if isLive {
             context.coordinator.reloadObserver = NotificationCenter.default.addObserver(
@@ -74,7 +78,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
                 queue: .main
             ) { [weak coordinator = context.coordinator] _ in
                 Task { @MainActor in
-                    coordinator?.performReload()
+                    coordinator?.performManualReload()
                 }
             }
         } else {
@@ -121,8 +125,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
             coordinator.seekObserver = nil
         }
 
-        uiViewController.mediaPlayer?.stopAsync()
-        uiViewController.mediaPlayer = nil
+        uiViewController.retireCurrentPlayer()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -132,6 +135,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
     class VLCPlayerViewController: UIViewController {
         var onPlayPause: (() -> Void)?
         var onSeek: ((Int) -> Void)?
+        var onRetire: (@MainActor (VLCMediaPlayer) -> Void)?
         var mediaPlayer: VLCMediaPlayer?
         var seekInterval = 30
 
@@ -182,8 +186,22 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            mediaPlayer?.stopAsync()
+            retireCurrentPlayer()
+        }
+
+        /// Hands the player to the coordinator for teardown so `delegate`/`drawable` are cleared on
+        /// the main thread before the blocking `stop()`. The fallback keeps the same ordering for the
+        /// case where the coordinator has already gone away.
+        func retireCurrentPlayer() {
+            guard let player = mediaPlayer else { return }
             mediaPlayer = nil
+            if let onRetire {
+                onRetire(player)
+            } else {
+                player.delegate = nil
+                player.drawable = nil
+                player.retireAsync()
+            }
         }
 
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -210,10 +228,14 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
 
         override var mediaPlayer: VLCMediaPlayer? { controller?.mediaPlayer }
 
-        func performReload() {
+        override func clearPlayerReference() {
+            controller?.mediaPlayer = nil
+        }
+
+        override func performReload() {
             guard let controller, let profile, let url else { return }
 
-            controller.mediaPlayer?.stopAsync()
+            controller.retireCurrentPlayer()
             NotificationCenter.default.post(
                 name: .playerInitializing,
                 object: nil,
@@ -228,8 +250,7 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
 
             resetPlaybackTracking()
 
-            newPlayer.delegate = self
-            newPlayer.play()
+            adopt(newPlayer)
         }
     }
 }

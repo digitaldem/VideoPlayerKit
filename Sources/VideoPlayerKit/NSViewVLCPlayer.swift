@@ -40,6 +40,7 @@ struct NSViewVLCPlayer: NSViewRepresentable {
         context.coordinator.profile = profile
         context.coordinator.url = url
         context.coordinator.referer = referer
+        context.coordinator.isLive = isLive
         context.coordinator.isMuted = isMuted
         context.coordinator.seekInterval = seekInterval
 
@@ -50,7 +51,7 @@ struct NSViewVLCPlayer: NSViewRepresentable {
                 queue: .main
             ) { [weak coordinator = context.coordinator] _ in
                 MainActor.assumeIsolated {
-                    coordinator?.performReload()
+                    coordinator?.performManualReload()
                 }
             }
 
@@ -76,8 +77,7 @@ struct NSViewVLCPlayer: NSViewRepresentable {
             }
         }
 
-        player.delegate = context.coordinator
-        player.play()
+        context.coordinator.adopt(player)
 
         return containerView
     }
@@ -100,8 +100,10 @@ struct NSViewVLCPlayer: NSViewRepresentable {
             coordinator.seekObserver = nil
         }
 
-        coordinator.player?.stopAsync()
-        coordinator.player = nil
+        if let player = coordinator.player {
+            coordinator.player = nil
+            coordinator.retire(player)
+        }
     }
 
     class PlayerContainerView: NSView {
@@ -121,10 +123,17 @@ struct NSViewVLCPlayer: NSViewRepresentable {
 
         override var mediaPlayer: VLCMediaPlayer? { player }
 
-        func performReload() {
+        override func clearPlayerReference() {
+            player = nil
+        }
+
+        override func performReload() {
             guard let containerView, let profile, let url else { return }
 
-            player?.stopAsync()
+            if let old = player {
+                player = nil
+                retire(old)
+            }
             NotificationCenter.default.post(
                 name: .playerInitializing,
                 object: nil,
@@ -138,8 +147,7 @@ struct NSViewVLCPlayer: NSViewRepresentable {
             resetPlaybackTracking()
             player = newPlayer
 
-            newPlayer.delegate = self
-            newPlayer.play()
+            adopt(newPlayer)
         }
     }
 }
