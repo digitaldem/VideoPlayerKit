@@ -34,6 +34,9 @@ public enum VideoPlayerProfile {
 }
 
 internal struct VLCPlayerProfile {
+    // Matches the user agent the HockeyStreams scraper validates streams with
+    static let browserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
     let networkCaching: Int
     let liveCaching: Int
     let clockJitter: Int
@@ -67,6 +70,12 @@ internal struct VLCPlayerProfile {
 
         if let referer, !referer.absoluteString.isEmpty {
             media.addOption(":http-referrer=\(referer.absoluteString)")
+            // VLC's HLS demuxer fetches segments with its own HTTP code, which drops the referer (and user
+            // agent), so hosts that check them on segments answer 403. Routing segments through the regular
+            // HTTP access module sends both on every request.
+            media.addOption(":adaptive-use-access")
+            // Several of these CDNs refuse VLC's own user agent outright
+            media.addOption(":http-user-agent=\(Self.browserUserAgent)")
         }
 
         media.addOptions(options)
