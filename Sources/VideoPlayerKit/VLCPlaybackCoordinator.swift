@@ -116,6 +116,19 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
         }
     }
 
+    /// Moves to a fixed number of seconds from the start.
+    ///
+    /// Relative jumps cannot express "resume where I left off": doing it by jumping forward
+    /// assumes playback is at zero when the jump lands, which holds only until something buffers
+    /// or the stream opens mid-file. An absolute position says what is meant.
+    ///
+    /// Only meaningful on seekable media; a live stream has no fixed start to count from.
+    func performSeek(toSeconds seconds: Int) {
+        guard let mediaPlayer, mediaPlayer.isSeekable else { return }
+        let clamped = max(0, seconds)
+        mediaPlayer.time = VLCTime(int: Int32(clamped * 1000))
+    }
+
     /// Clears per-session tracking so a reloaded player re-announces playback start
     /// and resumes emitting playerPlaybackTimeChanged from the current position.
     func resetPlaybackTracking() {

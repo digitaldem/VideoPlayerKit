@@ -96,9 +96,16 @@ struct UIViewVLCPlayer: UIViewControllerRepresentable {
                 object: nil,
                 queue: .main
             ) { [weak coordinator = context.coordinator] notification in
+                // "position" is an absolute number of seconds from the start; "interval" is a
+                // relative jump. Position wins when both are given.
+                let absolutePosition = notification.userInfo?["position"] as? Int
                 let explicitInterval = notification.userInfo?["interval"] as? Int
                 Task { @MainActor in
-                    coordinator?.performSeek(interval: explicitInterval ?? coordinator?.seekInterval ?? 30)
+                    if let absolutePosition {
+                        coordinator?.performSeek(toSeconds: absolutePosition)
+                    } else {
+                        coordinator?.performSeek(interval: explicitInterval ?? coordinator?.seekInterval ?? 30)
+                    }
                 }
             }
         }
