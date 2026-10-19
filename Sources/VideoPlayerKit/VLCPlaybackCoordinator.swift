@@ -307,6 +307,14 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
         case .ended:
             print("⏏️ VLC Player: stream ended")
             cancelStallWatchdog()
+            // Unlike `.stopped`, which our own reload and teardown paths also raise, this state only
+            // arrives when the media ran out. That makes it the one signal a host can trust to mean
+            // "finished", which is what lets a caller leave the player on its own.
+            NotificationCenter.default.post(
+                name: .playerPlaybackEnded,
+                object: nil,
+                userInfo: ["url": url as Any]
+            )
 
         case .error:
             // A stream that hangs long enough usually lands here rather than staying in `.buffering`,
