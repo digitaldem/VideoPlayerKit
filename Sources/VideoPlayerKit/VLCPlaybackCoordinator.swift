@@ -25,6 +25,16 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
 
     private(set) var totalMinutes = 0
     private var lastPublishedMinute = -1
+    /// Where playback had reached, in milliseconds. A reload builds a fresh player at the URL and so
+    /// begins at zero; for anything that is not live that would turn a recovery into a restart, so
+    /// the position is carried across and re-applied once the new player reports playing.
+    /// Whether the viewer has paused. A paused stream makes no progress by definition, which is
+    /// indistinguishable from a stall to anything watching the clock -- so without this the watchdog
+    /// would fire on a deliberate pause and "recover" it by reloading and playing again, overriding
+    /// the pause and spending the retry budget on a stream that was never in trouble.
+    private var isPaused = false
+    private var lastPositionMS = 0
+    private var resumeAfterReloadMS = 0
     private var didSendPlaybackEvent = false
 
     /// Identity of the player we currently care about. Retired players keep emitting state changes
@@ -133,6 +143,8 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
     /// and resumes emitting playerPlaybackTimeChanged from the current position.
     func resetPlaybackTracking() {
         lastPublishedMinute = -1
+        lastPositionMS = 0
+        resumeAfterReloadMS = 0
         didSendPlaybackEvent = false
         cancelStallWatchdog()
     }
@@ -143,6 +155,9 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
     /// as soon as it is (`.playing`, `.esAdded`, or a time update). A brief rebuffer therefore never
     /// trips it, but an internet stream that wedges mid-playback does.
     private func startStallWatchdog() {
+        // Paused is not stalled. libVLC reports buffering while paused, which would otherwise arm
+        // this and have a deliberate pause look like a dead stream twenty seconds later.
+        guard !isPaused else { return }
         guard stallWatchdog == nil else { return }
         stallWatchdog = Task { [weak self, stallTimeoutSeconds] in
             try? await Task.sleep(nanoseconds: stallTimeoutSeconds * 1_000_000_000)
@@ -182,10 +197,13 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
             retire(mediaPlayer)
         }
 
-        guard isLive, recoveryAttempts < maxRecoveryAttempts else {
-            if isLive {
-                print("🛑 VLC Player: \(reason), giving up after \(recoveryAttempts) reload attempts")
-            }
+        // Recoverable whether or not it is live. Only live streams used to retry, which left the
+        // case most likely to come back -- a static file on the LAN -- with no attempt at all: a
+        // twenty second buffering stall after a pause went straight to the error glyph. A file does
+        // not move on while we reconnect, so it is recovered to where it was rather than restarted.
+        if !isLive { resumeAfterReloadMS = lastPositionMS }
+        guard recoveryAttempts < maxRecoveryAttempts else {
+            print("🛑 VLC Player: \(reason), giving up after \(recoveryAttempts) reload attempts")
             NotificationCenter.default.post(
                 name: .playerPlaybackError,
                 object: nil,
@@ -212,6 +230,9 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
             try? await Task.sleep(nanoseconds: delaySeconds * 1_000_000_000)
             guard !Task.isCancelled else { return }
             self?.recoveryTask = nil
+            // Paused during the backoff: the viewer is in charge, and reloading now would start
+            // playback they did not ask for.
+            guard self?.isPaused != true else { return }
             self?.performReload()
         }
     }
@@ -270,8 +291,16 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
 
         case .playing:
             print("▶️ VLC Player: stream playing")
+            isPaused = false
             cancelStallWatchdog()
             noteStreamIsHealthy()
+            // Put a recovered file back where it was. Only ever set for non-live media, and cleared
+            // immediately so a later genuine seek is not fought over.
+            if resumeAfterReloadMS > 0 {
+                print("⏩ VLC Player: restoring position after reload")
+                mediaPlayer?.time = VLCTime(int: Int32(resumeAfterReloadMS))
+                resumeAfterReloadMS = 0
+            }
             NotificationCenter.default.post(
                 name: .playerPlaybackResumed,
                 object: nil,
@@ -291,6 +320,7 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
 
         case .paused:
             print("⏸️ VLC Player: stream paused")
+            isPaused = true
             cancelStallWatchdog()
             NotificationCenter.default.post(
                 name: .playerPlaybackPaused,
@@ -333,6 +363,7 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
         cancelStallWatchdog()
         guard currentMS > 0 else { return }
         noteStreamIsHealthy()
+        lastPositionMS = currentMS
         let currentMinute = currentMS / 1000 / 60
         if currentMinute > lastPublishedMinute {
             lastPublishedMinute = currentMinute
