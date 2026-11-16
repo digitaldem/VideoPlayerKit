@@ -241,8 +241,9 @@ final class VideoPlayerKitTests: XCTestCase {
 
     func testPreciseProfileOptions() {
         let options = VideoPlayerProfile.precise.vlc.options
-        XCTAssertEqual(options["network-caching"] as? Int, 3000)
-        XCTAssertEqual(options["live-caching"] as? Int, 3000)
+        // 7000 since 60b27e9, deliberately -- the reasoning is on VideoPlayerProfile.
+        XCTAssertEqual(options["network-caching"] as? Int, 7000)
+        XCTAssertEqual(options["live-caching"] as? Int, 7000)
         XCTAssertEqual(options["clock-jitter"] as? Int, 5000)
         XCTAssertEqual(options["clock-synchro"] as? Int, 0)
         XCTAssertEqual(options["skip-frames"] as? Bool, false)
@@ -252,18 +253,21 @@ final class VideoPlayerKitTests: XCTestCase {
         XCTAssertEqual(options["avcodec-skip-idct"] as? Int, 0)
         XCTAssertEqual(options["avcodec-hw"] as? String, "any")
         XCTAssertEqual(options["http-reconnect"] as? Bool, true)
+        // With it on, VLC re-requests the HLS playlist in a loop and never fetches a segment.
+        XCTAssertNil(options["http-continuous"])
     }
 
     func testAdaptiveProfileOptions() {
         let options = VideoPlayerProfile.adaptive.vlc.options
-        XCTAssertEqual(options["network-caching"] as? Int, 1500)
-        XCTAssertEqual(options["live-caching"] as? Int, 1500)
+        XCTAssertEqual(options["network-caching"] as? Int, 7000)
+        XCTAssertEqual(options["live-caching"] as? Int, 7000)
         XCTAssertEqual(options["clock-jitter"] as? Int, 500)
         XCTAssertEqual(options["clock-synchro"] as? Int, 0)
         XCTAssertEqual(options["skip-frames"] as? Bool, true)
         XCTAssertEqual(options["drop-late-frames"] as? Bool, true)
         XCTAssertEqual(options["avcodec-hurry-up"] as? Bool, true)
         XCTAssertEqual(options["http-reconnect"] as? Bool, true)
+        XCTAssertNil(options["http-continuous"])
     }
 
     @MainActor
