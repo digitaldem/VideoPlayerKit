@@ -96,6 +96,10 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
     ///  3. Run the blocking `stop()` on a serial background queue, then hand the last strong
     ///     reference back to the main queue so `-[VLCMediaPlayer dealloc]` also runs on main.
     func retire(_ player: VLCMediaPlayer) {
+        // Left while paused: nothing will resume, so the silence would otherwise run on.
+        #if os(iOS) || os(tvOS)
+        AudioSessionHold.shared.release()
+        #endif
         if activePlayerID == ObjectIdentifier(player) {
             activePlayerID = nil
             cancelStallWatchdog()
@@ -111,6 +115,11 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
     func togglePlayPause() {
         guard let mediaPlayer else { return }
         if mediaPlayer.isPlaying {
+            // Before the pause, not after: VLC deactivates the audio session inside it, and the
+            // hold is what makes that fail. See AudioSessionHold.
+            #if os(iOS) || os(tvOS)
+            AudioSessionHold.shared.hold()
+            #endif
             mediaPlayer.pause()
         } else {
             mediaPlayer.play()
@@ -292,6 +301,9 @@ class VLCPlaybackCoordinator: NSObject, VLCMediaPlayerDelegate {
         case .playing:
             print("▶️ VLC Player: stream playing")
             isPaused = false
+            #if os(iOS) || os(tvOS)
+            AudioSessionHold.shared.release()
+            #endif
             cancelStallWatchdog()
             noteStreamIsHealthy()
             // Put a recovered file back where it was. Only ever set for non-live media, and cleared
